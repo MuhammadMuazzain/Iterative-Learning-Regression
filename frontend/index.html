@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ML Feedback</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 0 20px;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        h2, h3 {
+            color: #222;
+        }
+        textarea {
+            width: 100%;
+            padding: 10px;
+            font-size: 16px;
+            resize: vertical;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            margin-top: 10px;
+            cursor: pointer;
+            border: none;
+            border-radius: 5px;
+            background-color: #007bff;
+            color: white;
+            transition: 0.2s;
+        }
+        button:hover:not(:disabled) {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        #result {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 0 8px rgba(0,0,0,0.1);
+            font-size: 16px;
+        }
+        select {
+            padding: 8px;
+            font-size: 16px;
+        }
+        .label-human { color: green; font-weight: bold; }
+        .label-human-edited-ai { color: orange; font-weight: bold; }
+        .label-ai { color: red; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h2>ML Text Feedback System</h2>
+    <div>
+        <textarea id="textInput" rows="6" placeholder="Enter text here..."></textarea>
+        <button onclick="getPrediction()">Get Prediction</button>
+    </div>
+
+    <h3>Prediction Result:</h3>
+    <div id="result">No prediction yet</div>
+
+    <h3>Submit Feedback</h3>
+    <select id="feedbackSelect">
+        <option value="human">Human-written</option>
+        <option value="human_edited_ai">Human-edited AI</option>
+        <option value="ai">AI-generated</option>
+    </select>
+    <button id="feedbackBtn" onclick="sendFeedback()" disabled>Submit Feedback</button>
+
+    <script>
+        let lastScore = null;
+        let lastText = "";
+
+        async function getPrediction() {
+            const text = document.getElementById('textInput').value;
+            if (!text) return alert("Enter some text!");
+
+            try {
+                const response = await fetch("http://127.0.0.1:8000/predict", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ text })
+                });
+
+                const data = await response.json();
+                lastScore = data.score;
+                lastText = data.text;
+
+                let labelClass = "";
+                if (data.label === "Human-written") labelClass = "label-human";
+                else if (data.label === "Human-edited AI") labelClass = "label-human-edited-ai";
+                else if (data.label === "AI-generated") labelClass = "label-ai";
+
+                document.getElementById('result').innerHTML =
+                    `Score: ${data.score.toFixed(3)}<br>Label: <span class="${labelClass}">${data.label}</span>`;
+
+                document.getElementById('feedbackBtn').disabled = false;
+
+                // Auto-select predicted label in feedback dropdown
+                if (data.label === "Human-written") document.getElementById('feedbackSelect').value = "human";
+                else if (data.label === "Human-edited AI") document.getElementById('feedbackSelect').value = "human_edited_ai";
+                else if (data.label === "AI-generated") document.getElementById('feedbackSelect').value = "ai";
+
+            } catch (err) {
+                console.error(err);
+                alert("Prediction failed.");
+            }
+        }
+
+        async function sendFeedback() {
+            const feedback = document.getElementById('feedbackSelect').value;
+
+            if (!lastText || lastScore === null) {
+                return alert("Get a prediction first!");
+            }
+
+            const payload = {
+                text: lastText,
+                model_score: lastScore,
+                user_feedback: feedback,
+                model_version: "roberta_large_lora-sigmoid"
+            };
+
+            try {
+                const response = await fetch("http://127.0.0.1:8000/feedback", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+
+                if (response.status === 200) {
+                    alert("✅ Feedback saved successfully!");
+                    document.getElementById('feedbackBtn').disabled = true;
+                } else {
+                    const data = await response.json();
+                    alert("⚠️ " + data.detail);
+                }
+            } catch (err) {
+                console.error(err);
+                alert("Failed to save feedback. Check your DB connection and table!");
+            }
+        }
+    </script>
+</body>
+</html>

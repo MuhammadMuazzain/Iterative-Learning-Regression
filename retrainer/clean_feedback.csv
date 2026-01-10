@@ -1,0 +1,2 @@
+id,text,model_score,user_feedback,model_version,source,event_timestamp,created_at,text_hash,target_score
+1,"ChatGPT is your AI chatbot for everyday use. Chat with the most advanced AI to explore ideas, solve problems, and learn faster.",0.631054162979126,ai,roberta_large_lora-sigmoid,api,2026-01-10 04:32:53.263006+00:00,2026-01-10 09:32:53.257922+00:00,5eb3fb27e725ed6ce8e61535c55ca14aa40dce056a51d12bd9be493149a81037,1.0

@@ -1,0 +1,25 @@
+# ------------------------------
+# Python version: 3.10.x
+# CUDA version: 12.1 (matches PyTorch wheels)
+# ------------------------------
+
+# PyTorch and Lightning (CUDA-enabled)
+# torch==2.9.1+cu121       # PyTorch with CUDA 12.1
+# torchvision==0.16.0+cu121
+# torchaudio==2.1.0        # torchaudio usually CPU-only; matches PyTorch
+pytorch-lightning>=2.6.0
+
+# Hugging Face Transformers
+transformers>=4.35.0
+tokenizers>=0.14.0
+
+# MLflow for experiment tracking
+# mlflow>=2.5.0
+
+# Data & Utilities
+pandas>=2.1.0
+scikit-learn>=1.3.0
+numpy>=1.26.0
+
+# Optional GPU acceleration utilities (if CUDA installed)
+# cupy or torch-cuda version should match the installed PyTorch CUDA wheel
