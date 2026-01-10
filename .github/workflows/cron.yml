@@ -31,4 +31,4 @@ jobs:
         DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         DB_PORT: ${{ secrets.DB_PORT }}
       run: |
-        python scripts/fetch_and_clean.py
+        python retrainer/db_fetch_qualgates.py
