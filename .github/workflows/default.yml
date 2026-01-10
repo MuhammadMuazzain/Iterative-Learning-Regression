@@ -24,4 +24,4 @@ jobs:
           pip install -r requirements.txt
 
       - name: Dummy test step
-        run: echo "GitHub Actions pipeline is working"
+        run: echo "Github Action Pipe is working"
