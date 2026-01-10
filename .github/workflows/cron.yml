@@ -1,34 +1,27 @@
 name: Weekly ML Retraining Pipeline
 
 on:
-  workflow_dispatch:   # manual trigger
+  workflow_dispatch:
   schedule:
-    - cron: "0 2 * * 0"  # Sunday 2 AM UTC
+    - cron: "0 2 * * 0"
 
 jobs:
   retrain:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: "3.10"
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-    - name: Fetch & clean feedback data
-      env:
-        DB_HOST: ${{ secrets.DB_HOST }}
-        DB_NAME: ${{ secrets.DB_NAME }}
-        DB_USER: ${{ secrets.DB_USER }}
-        DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-        DB_PORT: ${{ secrets.DB_PORT }}
-      run: |
-        python retrainer/db_fetch_qualgates.py
+      - name: Dummy test step
+        run: echo "GitHub Actions pipeline is working"
