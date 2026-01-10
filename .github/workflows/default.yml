@@ -29,4 +29,4 @@ jobs:
 
       - name: Run data quality gates
         run: |
-          python training/db_fetch_qualgates.py
+          python retrainer/db_fetch_qualgates.py
