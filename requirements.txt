@@ -2,28 +2,39 @@
 python-dotenv>=1.0.0
 
 # Database
+# Required for db_fetch_qualgates.py: PostgreSQL adapter for Python
 psycopg2-binary>=2.9.0
+# SQLAlchemy provides better pandas.read_sql support and database abstraction
+sqlalchemy>=2.0.0
 
 # API Framework
 fastapi>=0.104.0
-uvicorn>=0.24.0
+uvicorn[standard]>=0.24.0
 
 # ML/AI
 torch>=2.0.0
 transformers>=4.35.0
 tokenizers>=0.14.0
 pytorch-lightning>=2.6.0
+# PEFT (Parameter-Efficient Fine-Tuning) for LoRA adapters
+peft>=0.6.0
 
-# MLflow
+# MLflow - Experiment tracking and model versioning
 mlflow>=2.5.0
 
 # Data processing
+# Required for db_fetch_qualgates.py: DataFrame operations and read_sql
 pandas>=2.1.0
 numpy>=1.26.0
 scikit-learn>=1.3.0
 
 # Language detection
+# Required for db_fetch_qualgates.py: Language detection for filtering English text
 langdetect>=1.0.9
+
+# Visualization (for training scripts with plots and metrics)
+matplotlib>=3.7.0
+seaborn>=0.12.0
 
 # Utilities
 pydantic>=2.0.0

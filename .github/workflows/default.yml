@@ -1,9 +1,10 @@
 name: Weekly ML Retraining Pipeline
 
+# Triggers
 on:
   schedule:
     - cron: "0 2 * * 1"   # Every Monday at 2 AM UTC
-  workflow_dispatch:
+  workflow_dispatch:       # Allows manual trigger
   push:
     paths:
       - "training/**"
@@ -15,18 +16,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1️⃣ Checkout repo
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      # 2️⃣ Setup Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
+      # 3️⃣ Install dependencies
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
-      - name: Run data quality gates
-        run: |
-          python retrainer/db_fetch_qualgates.py
+      # 4️⃣ Run data quality gates (clean data)
+      - name: Data Quality Gates
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+        run: python retrainer/nude.py
