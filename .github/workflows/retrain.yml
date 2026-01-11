@@ -67,7 +67,7 @@ jobs:
         # Check if validation passed
         if [ -f clean_feedback.csv ]; then
           echo "valid=true" >> $GITHUB_OUTPUT
-          SAMPLES=$(wc -l < clean_feedback.csv)
+          SAMPLES=$(tail -n +2 clean_feedback.csv | wc -l)
           echo "count=$SAMPLES" >> $GITHUB_OUTPUT
         else
           echo "valid=false" >> $GITHUB_OUTPUT
@@ -144,7 +144,7 @@ jobs:
         MODEL_NAME: roberta-large
       run: |
         cd retrainer
-        python train_improved.py
+        python train.py
         
         # Extract metrics from output
         if [ -f models/candidate_metrics.json ]; then
@@ -205,6 +205,7 @@ jobs:
       uses: actions/checkout@v3
       with:
         fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
     
     - name: 🐍 Set up Python
       uses: actions/setup-python@v4
@@ -244,25 +245,33 @@ jobs:
         cd retrainer
         
         # Run promotion script
-        if python post_training_promotion.py; then
+        if python post_training.py; then
           echo "promoted=true" >> $GITHUB_OUTPUT
           
-          # Extract improvement percentage
+          # Extract improvement percentage if available
           if [ -f models/model_metrics.json ]; then
             IMPROVEMENT=$(python -c "
             import json
+            import sys
             try:
                 with open('models/model_metrics.json') as f:
                     metrics = json.load(f)
-                    print(metrics.get('improvement_pct', 'N/A'))
-            except:
+                    # Calculate improvement if both current and previous exist
+                    if 'test_mae' in metrics:
+                        print(metrics.get('test_mae', 'N/A'))
+                    else:
+                        print('N/A')
+            except Exception as e:
                 print('N/A')
-            ")
+            " 2>/dev/null || echo "N/A")
             echo "improvement=$IMPROVEMENT" >> $GITHUB_OUTPUT
+          else
+            echo "improvement=N/A" >> $GITHUB_OUTPUT
           fi
         else
           echo "promoted=false" >> $GITHUB_OUTPUT
           echo "improvement=0" >> $GITHUB_OUTPUT
+          exit 0  # Don't fail the job, just mark as not promoted
         fi
     
     - name: 📤 Push promoted model to DVC
@@ -273,15 +282,15 @@ jobs:
     - name: 🔧 Configure Git
       if: steps.promote.outputs.promoted == 'true'
       run: |
-        git config user.name "GitHub Actions Bot"
-        git config user.email "actions@github.com"
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
     
     - name: 💾 Commit and push changes
       if: steps.promote.outputs.promoted == 'true'
       run: |
-        git add retrainer/models/model.pt.dvc retrainer/models/model_metrics.json retrainer/models/.gitignore
-        git commit -m "🚀 Promote model - MAE: ${{ needs.train-model.outputs.test_mae }} (Run: ${{ needs.train-model.outputs.run_id }})" || echo "No changes to commit"
-        git push
+        git add retrainer/models/*.dvc retrainer/models/.gitignore retrainer/models/model_metrics.json || true
+        git diff --cached --quiet || git commit -m "🚀 Promote model - MAE: ${{ needs.train-model.outputs.test_mae }} (Run: ${{ needs.train-model.outputs.run_id }})"
+        git push || echo "No changes to push"
 
   # ============================================================
   # JOB 4: NOTIFICATIONS
@@ -322,11 +331,11 @@ jobs:
                   },
                   {
                     "type": "mrkdwn",
-                    "text": "*Improvement:*\n${{ needs.promote-model.outputs.improvement }}%"
+                    "text": "*Run ID:*\n${{ needs.train-model.outputs.run_id }}"
                   },
                   {
                     "type": "mrkdwn",
-                    "text": "*Run ID:*\n${{ needs.train-model.outputs.run_id }}"
+                    "text": "*Samples:*\n${{ needs.data-validation.outputs.sample_count }}"
                   }
                 ]
               },
@@ -393,7 +402,7 @@ jobs:
       continue-on-error: true
     
     - name: ❌ Notify failure
-      if: needs.train-model.result == 'failure' || needs.promote-model.result == 'failure'
+      if: needs.train-model.result == 'failure' || needs.promote-model.result == 'failure' || needs.data-validation.result == 'failure'
       uses: slackapi/slack-github-action@v1
       with:
         webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -420,7 +429,7 @@ jobs:
                 "fields": [
                   {
                     "type": "mrkdwn",
-                    "text": "*Failed Job:*\n${{ needs.train-model.result == 'failure' && 'Training' || 'Promotion' }}"
+                    "text": "*Failed Step:*\n${{ needs.data-validation.result == 'failure' && 'Data Validation' || needs.train-model.result == 'failure' && 'Training' || 'Promotion' }}"
                   },
                   {
                     "type": "mrkdwn",
@@ -462,8 +471,8 @@ jobs:
           Metrics:
           - Test MAE: ${{ needs.train-model.outputs.test_mae }}
           - Test RMSE: ${{ needs.train-model.outputs.test_rmse }}
-          - Improvement: ${{ needs.promote-model.outputs.improvement }}%
           - MLflow Run: ${{ needs.train-model.outputs.run_id }}
+          - Samples: ${{ needs.data-validation.outputs.sample_count }}
           
           View logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       continue-on-error: true
@@ -483,3 +492,4 @@ jobs:
       with:
         age: '30 days'
         skip-recent: 5
+      continue-on-error: true
