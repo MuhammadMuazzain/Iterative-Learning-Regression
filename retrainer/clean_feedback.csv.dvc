@@ -1,0 +1,5 @@
+outs:
+- md5: 06c5c8b9039f809d9ea6703a50717a74
+  size: 426
+  hash: md5
+  path: clean_feedback.csv
