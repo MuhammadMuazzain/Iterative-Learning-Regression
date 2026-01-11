@@ -1,0 +1,24 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environments
+.venv/
+venv/
+
+# Logs
+*.log
+
+# MLflow local artifacts (NEVER track with DVC)
+mlruns/
+
+# Temporary files
+tmp/
+*.tmp
+
+# OS junk
+.DS_Store
+
+# Large raw dumps (you fetch from DB anyway)
+*.dump
+*.sql
