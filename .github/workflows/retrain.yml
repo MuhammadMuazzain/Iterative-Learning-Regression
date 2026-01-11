@@ -1,39 +1,485 @@
-name: Monthly ML Retraining Pipeline
+name: Automated Model Retraining Pipeline
 
 on:
+  # Scheduled runs (every Sunday at 2 AM UTC)
   schedule:
-    - cron: "0 2 * * 1"   # Every Monday at 2 AM UTC
+    - cron: '0 2 * * 0'
+  
+  # Manual trigger via GitHub UI
   workflow_dispatch:
+    inputs:
+      force_promotion:
+        description: 'Force model promotion (skip improvement check)'
+        required: false
+        type: boolean
+        default: false
+  
+  # Trigger on new data commits
   push:
     paths:
-      - "training/**"
-      - "backend/**"
+      - 'retrainer/clean_feedback.csv'
+
+env:
+  PYTHON_VERSION: '3.10'
+  DVC_REMOTE: gdrive-remote
 
 jobs:
-  retrain:
+  # ============================================================
+  # JOB 1: DATA VALIDATION & FETCH
+  # ============================================================
+  data-validation:
+    name: Fetch & Validate Data
     runs-on: ubuntu-latest
-
+    
+    outputs:
+      data_valid: ${{ steps.validate.outputs.valid }}
+      sample_count: ${{ steps.validate.outputs.count }}
+    
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+    - name: 📥 Checkout repository
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+    
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        cache: 'pip'
+    
+    - name: 📦 Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: 🔍 Fetch and validate data
+      id: validate
+      env:
+        DB_NAME: ${{ secrets.DB_NAME }}
+        DB_USER: ${{ secrets.DB_USER }}
+        DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        DB_HOST: ${{ secrets.DB_HOST }}
+        DB_PORT: ${{ secrets.DB_PORT }}
+      run: |
+        cd retrainer
+        python fetch_validate_feedback.py
+        
+        # Check if validation passed
+        if [ -f clean_feedback.csv ]; then
+          echo "valid=true" >> $GITHUB_OUTPUT
+          SAMPLES=$(wc -l < clean_feedback.csv)
+          echo "count=$SAMPLES" >> $GITHUB_OUTPUT
+        else
+          echo "valid=false" >> $GITHUB_OUTPUT
+          echo "count=0" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: 📤 Upload cleaned data as artifact
+      if: steps.validate.outputs.valid == 'true'
+      uses: actions/upload-artifact@v3
+      with:
+        name: cleaned-data
+        path: retrainer/clean_feedback.csv
+        retention-days: 7
+    
+    - name: ❌ Fail if validation failed
+      if: steps.validate.outputs.valid != 'true'
+      run: |
+        echo "::error::Data validation failed. Not enough samples or data quality issues."
+        exit 1
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
+  # ============================================================
+  # JOB 2: TRAIN CANDIDATE MODEL
+  # ============================================================
+  train-model:
+    name: Train Candidate Model
+    needs: data-validation
+    runs-on: ubuntu-latest
+    
+    # Use GPU runner if available (optional, costs money)
+    # runs-on: [self-hosted, gpu]
+    
+    outputs:
+      run_id: ${{ steps.train.outputs.run_id }}
+      test_mae: ${{ steps.train.outputs.test_mae }}
+      test_rmse: ${{ steps.train.outputs.test_rmse }}
+    
+    steps:
+    - name: 📥 Checkout repository
+      uses: actions/checkout@v3
+    
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        cache: 'pip'
+    
+    - name: 📦 Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: 📥 Download cleaned data
+      uses: actions/download-artifact@v3
+      with:
+        name: cleaned-data
+        path: retrainer/
+    
+    - name: 🎯 Configure DVC
+      env:
+        GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+        GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+      run: |
+        pip install dvc[gdrive]
+        dvc remote modify ${{ env.DVC_REMOTE }} gdrive_client_id "$GDRIVE_CLIENT_ID"
+        dvc remote modify ${{ env.DVC_REMOTE }} gdrive_client_secret "$GDRIVE_CLIENT_SECRET"
+    
+    - name: 📥 Pull existing models from DVC
+      run: dvc pull || echo "No existing models to pull"
+    
+    - name: 🤖 Train candidate model
+      id: train
+      env:
+        MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+        MODEL_NAME: roberta-large
+      run: |
+        cd retrainer
+        python train_improved.py
+        
+        # Extract metrics from output
+        if [ -f models/candidate_metrics.json ]; then
+          TEST_MAE=$(python -c "import json; print(json.load(open('models/candidate_metrics.json'))['test_mae'])")
+          TEST_RMSE=$(python -c "import json; print(json.load(open('models/candidate_metrics.json'))['test_rmse'])")
+          RUN_ID=$(python -c "import json; print(json.load(open('models/candidate_metrics.json'))['run_id'])")
+          
+          echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
+          echo "test_mae=$TEST_MAE" >> $GITHUB_OUTPUT
+          echo "test_rmse=$TEST_RMSE" >> $GITHUB_OUTPUT
+        else
+          echo "::error::Training failed - no metrics generated"
+          exit 1
+        fi
+    
+    - name: 📤 Upload candidate model
+      uses: actions/upload-artifact@v3
+      with:
+        name: candidate-model
+        path: |
+          retrainer/models/candidate_model.pt
+          retrainer/models/candidate_metrics.json
+        retention-days: 30
+    
+    - name: 📊 Comment training results on PR
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: `## 🤖 Model Training Complete
+            
+            **Metrics:**
+            - Test MAE: ${{ steps.train.outputs.test_mae }}
+            - Test RMSE: ${{ steps.train.outputs.test_rmse }}
+            - Run ID: ${{ steps.train.outputs.run_id }}
+            - Samples: ${{ needs.data-validation.outputs.sample_count }}
+            `
+          })
 
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
+  # ============================================================
+  # JOB 3: EVALUATE & PROMOTE MODEL
+  # ============================================================
+  promote-model:
+    name: Evaluate & Promote Model
+    needs: [data-validation, train-model]
+    runs-on: ubuntu-latest
+    
+    outputs:
+      promoted: ${{ steps.promote.outputs.promoted }}
+      improvement: ${{ steps.promote.outputs.improvement }}
+    
+    steps:
+    - name: 📥 Checkout repository
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+    
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        cache: 'pip'
+    
+    - name: 📦 Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install dvc[gdrive]
+    
+    - name: 🎯 Configure DVC
+      env:
+        GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+        GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+      run: |
+        dvc remote modify ${{ env.DVC_REMOTE }} gdrive_client_id "$GDRIVE_CLIENT_ID"
+        dvc remote modify ${{ env.DVC_REMOTE }} gdrive_client_secret "$GDRIVE_CLIENT_SECRET"
+    
+    - name: 📥 Pull current production model
+      run: dvc pull || echo "No production model yet (first deployment)"
+    
+    - name: 📥 Download candidate model
+      uses: actions/download-artifact@v3
+      with:
+        name: candidate-model
+        path: retrainer/models/
+    
+    - name: ⚖️ Evaluate and promote
+      id: promote
+      env:
+        MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+        FORCE_PROMOTION: ${{ github.event.inputs.force_promotion }}
+      run: |
+        cd retrainer
+        
+        # Run promotion script
+        if python post_training_promotion.py; then
+          echo "promoted=true" >> $GITHUB_OUTPUT
+          
+          # Extract improvement percentage
+          if [ -f models/model_metrics.json ]; then
+            IMPROVEMENT=$(python -c "
+            import json
+            try:
+                with open('models/model_metrics.json') as f:
+                    metrics = json.load(f)
+                    print(metrics.get('improvement_pct', 'N/A'))
+            except:
+                print('N/A')
+            ")
+            echo "improvement=$IMPROVEMENT" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "promoted=false" >> $GITHUB_OUTPUT
+          echo "improvement=0" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: 📤 Push promoted model to DVC
+      if: steps.promote.outputs.promoted == 'true'
+      run: |
+        dvc push
+    
+    - name: 🔧 Configure Git
+      if: steps.promote.outputs.promoted == 'true'
+      run: |
+        git config user.name "GitHub Actions Bot"
+        git config user.email "actions@github.com"
+    
+    - name: 💾 Commit and push changes
+      if: steps.promote.outputs.promoted == 'true'
+      run: |
+        git add retrainer/models/model.pt.dvc retrainer/models/model_metrics.json retrainer/models/.gitignore
+        git commit -m "🚀 Promote model - MAE: ${{ needs.train-model.outputs.test_mae }} (Run: ${{ needs.train-model.outputs.run_id }})" || echo "No changes to commit"
+        git push
 
-      - name: Run data quality gates
-        run: |
-          python training/data_quality.py
+  # ============================================================
+  # JOB 4: NOTIFICATIONS
+  # ============================================================
+  notify:
+    name: Send Notifications
+    needs: [train-model, promote-model]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: 🎉 Notify success (Promoted)
+      if: needs.promote-model.outputs.promoted == 'true'
+      uses: slackapi/slack-github-action@v1
+      with:
+        webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+        payload: |
+          {
+            "text": "🎉 *New Model Promoted to Production!*",
+            "blocks": [
+              {
+                "type": "header",
+                "text": {
+                  "type": "plain_text",
+                  "text": "🚀 Model Deployment Success"
+                }
+              },
+              {
+                "type": "section",
+                "fields": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Test MAE:*\n${{ needs.train-model.outputs.test_mae }}"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Test RMSE:*\n${{ needs.train-model.outputs.test_rmse }}"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Improvement:*\n${{ needs.promote-model.outputs.improvement }}%"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Run ID:*\n${{ needs.train-model.outputs.run_id }}"
+                  }
+                ]
+              },
+              {
+                "type": "context",
+                "elements": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "Triggered by: ${{ github.actor }} | <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Logs>"
+                  }
+                ]
+              }
+            ]
+          }
+      continue-on-error: true
+    
+    - name: ⚠️ Notify rejection (Not promoted)
+      if: needs.promote-model.outputs.promoted == 'false' && needs.promote-model.result == 'success'
+      uses: slackapi/slack-github-action@v1
+      with:
+        webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+        payload: |
+          {
+            "text": "⚠️ *Model Training Complete - Not Promoted*",
+            "blocks": [
+              {
+                "type": "header",
+                "text": {
+                  "type": "plain_text",
+                  "text": "⚠️ Model Not Promoted"
+                }
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "Candidate model trained successfully but did not meet promotion criteria."
+                }
+              },
+              {
+                "type": "section",
+                "fields": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Test MAE:*\n${{ needs.train-model.outputs.test_mae }}"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Test RMSE:*\n${{ needs.train-model.outputs.test_rmse }}"
+                  }
+                ]
+              },
+              {
+                "type": "context",
+                "elements": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "💡 *Suggestion:* Collect more data or adjust hyperparameters"
+                  }
+                ]
+              }
+            ]
+          }
+      continue-on-error: true
+    
+    - name: ❌ Notify failure
+      if: needs.train-model.result == 'failure' || needs.promote-model.result == 'failure'
+      uses: slackapi/slack-github-action@v1
+      with:
+        webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+        payload: |
+          {
+            "text": "❌ *Retraining Pipeline Failed*",
+            "blocks": [
+              {
+                "type": "header",
+                "text": {
+                  "type": "plain_text",
+                  "text": "❌ Pipeline Failure"
+                }
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "The automated retraining pipeline encountered an error."
+                }
+              },
+              {
+                "type": "section",
+                "fields": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Failed Job:*\n${{ needs.train-model.result == 'failure' && 'Training' || 'Promotion' }}"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Triggered by:*\n${{ github.actor }}"
+                  }
+                ]
+              },
+              {
+                "type": "actions",
+                "elements": [
+                  {
+                    "type": "button",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "View Logs"
+                    },
+                    "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                  }
+                ]
+              }
+            ]
+          }
+      continue-on-error: true
+    
+    - name: 📧 Send email notification (Optional)
+      if: needs.promote-model.outputs.promoted == 'true'
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: smtp.gmail.com
+        server_port: 465
+        username: ${{ secrets.EMAIL_USERNAME }}
+        password: ${{ secrets.EMAIL_PASSWORD }}
+        subject: "🎉 New Model Promoted - MAE: ${{ needs.train-model.outputs.test_mae }}"
+        to: ${{ secrets.NOTIFICATION_EMAIL }}
+        from: ML Pipeline Bot
+        body: |
+          A new model has been successfully promoted to production!
+          
+          Metrics:
+          - Test MAE: ${{ needs.train-model.outputs.test_mae }}
+          - Test RMSE: ${{ needs.train-model.outputs.test_rmse }}
+          - Improvement: ${{ needs.promote-model.outputs.improvement }}%
+          - MLflow Run: ${{ needs.train-model.outputs.run_id }}
+          
+          View logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      continue-on-error: true
 
-      - name: Train model
-        run: |
-          python training/train.py
-
-      - name: Evaluate model
-        run: |
-          python training/evaluate.py
+  # ============================================================
+  # JOB 5: CLEANUP OLD ARTIFACTS
+  # ============================================================
+  cleanup:
+    name: Cleanup Old Artifacts
+    needs: [promote-model]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: 🧹 Delete old workflow artifacts
+      uses: c-hive/gha-remove-artifacts@v1
+      with:
+        age: '30 days'
+        skip-recent: 5
