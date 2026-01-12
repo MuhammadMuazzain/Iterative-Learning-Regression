@@ -1,4 +1,4 @@
-name: Automated Model Retraining Pipeline
+name: AutocMatoc
 
 on:
   # Scheduled runs (every Sunday at 2 AM UTC)
