@@ -37,7 +37,7 @@ jobs:
     
     steps:
     - name: 📥 Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         fetch-depth: 0
     
@@ -76,7 +76,7 @@ jobs:
     
     - name: 📤 Upload cleaned data as artifact
       if: steps.validate.outputs.valid == 'true'
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: cleaned-data
         path: retrainer/clean_feedback.csv
@@ -106,7 +106,7 @@ jobs:
     
     steps:
     - name: 📥 Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     
     - name: 🐍 Set up Python
       uses: actions/setup-python@v4
@@ -120,7 +120,7 @@ jobs:
         pip install -r requirements.txt
     
     - name: 📥 Download cleaned data
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: cleaned-data
         path: retrainer/
@@ -161,7 +161,7 @@ jobs:
         fi
     
     - name: 📤 Upload candidate model
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: candidate-model
         path: |
@@ -231,7 +231,7 @@ jobs:
       run: dvc pull || echo "No production model yet (first deployment)"
     
     - name: 📥 Download candidate model
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: candidate-model
         path: retrainer/models/
