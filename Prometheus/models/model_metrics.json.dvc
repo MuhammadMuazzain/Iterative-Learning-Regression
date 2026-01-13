@@ -1,0 +1,5 @@
+outs:
+- md5: fc011b25d7293e7fb9a171218d23c882
+  size: 189
+  hash: md5
+  path: model_metrics.json
